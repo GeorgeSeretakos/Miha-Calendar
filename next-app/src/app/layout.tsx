@@ -11,9 +11,13 @@ const openSans = Open_Sans({ variable: "--font-open-sans", subsets: ["latin"] })
 const roboto = Roboto({ variable: "--font-roboto", subsets: ["latin"] });
 
 export const metadata = {
-    title: "Miha Bodytec",
-    description: "Website for Miha Bodytec",
+    metadataBase: new URL('https://mihabodytecgreece.gr'),
+    title: { default: 'Miha Bodytec Greece', template: '%s | Miha Bodytec Greece' },
+    description: 'Επίσημος ιστότοπος Miha Bodytec στην Ελλάδα – EMS, εξοπλισμός, εκπαίδευση.',
+    alternates: { canonical: '/' },
+    robots: { index: true, follow: true },
 };
+
 
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

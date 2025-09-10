@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+export const metadata = { robots: { index: false, follow: false } }
+
 export default function ThankYou() {
   return (
     <main className="bg-black text-white min-h-screen flex flex-col items-center justify-center px-4 text-center">
