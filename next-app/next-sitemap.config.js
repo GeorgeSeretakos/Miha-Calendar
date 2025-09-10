@@ -5,6 +5,7 @@ module.exports = {
   changefreq: 'weekly',
   priority: 0.7,
   outDir: 'public', // Ensure Netlify serves the files
+  trailingSlash: true,
 
   // TEMP: explicitly list key routes so the sitemap isn't empty.
   // Replace with your actual routes; keep '/' for the homepage.
