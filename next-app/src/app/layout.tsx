@@ -23,7 +23,7 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 
     return (
-        <html lang="en">
+        <html lang="el">
         <body
             className={`
           ${manrope.variable} ${openSans.variable} ${roboto.variable}
