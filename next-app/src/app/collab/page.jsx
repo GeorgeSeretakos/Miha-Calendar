@@ -1,4 +1,3 @@
-// app/collab/page.jsx
 "use client";
 
 import { useEffect, useState } from "react";
