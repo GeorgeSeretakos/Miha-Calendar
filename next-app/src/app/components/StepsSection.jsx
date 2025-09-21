@@ -1,4 +1,3 @@
-// components/StepsSection.jsx
 import React from "react";
 
 const StepsSection = ({ steps }) => {

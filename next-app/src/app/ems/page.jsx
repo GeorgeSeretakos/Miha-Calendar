@@ -1,4 +1,3 @@
-// app/ems/page.jsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -11,8 +10,7 @@ import SplitColumnsWithImage from "../components/SplitColumnsWithImage";
 import VideoSection from "../components/VideoSection";
 import AboutSection from "../components/AboutSection";
 
-// Bilingual data (make sure your files export these)
-import { steps_el, steps_en } from "../../../public/data/steps";
+import { training_steps_el, training_steps_en } from "../../../public/data/steps";
 import { services_el, services_en } from "../../../public/data/services";
 
 export default function AboutPage() {
@@ -22,7 +20,7 @@ export default function AboutPage() {
     setLocale(saved);
   }, []);
 
-  const steps = locale === "en" ? steps_en : steps_el;
+  const steps = locale === "en" ? training_steps_en : training_steps_el;
   const services = locale === "en" ? services_en : services_el;
 
   return (

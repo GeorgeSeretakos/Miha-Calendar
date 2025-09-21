@@ -1,6 +1,4 @@
-// public/data/steps.js
-
-export const steps_el = [
+export const training_steps_el = [
   {
     number: 1,
     title: "Προετοιμασία",
@@ -19,7 +17,7 @@ export const steps_el = [
   },
 ];
 
-export const steps_en = [
+export const training_steps_en = [
   {
     number: 1,
     title: "Preparation",
@@ -38,5 +36,40 @@ export const steps_en = [
   },
 ];
 
-// (Optional) Greek as default for backward compatibility
-export default steps_el;
+export const appointment_steps_el = [
+  {
+    number: 1,
+    title: "Ψάξε",
+    description: "Βρες το κοντινότερο studio EMS",
+  },
+  {
+    number: 2,
+    title: "Κλείσε",
+    description:
+      "Κλείσε την 1η σου προπόνηση άμεσα και αξιόπιστα",
+  },
+  {
+    number: 3,
+    title: "Προπονήσου",
+    description: "Ξεκίνα να βλέπεις και να νιώθεις τη διαφορά στο σώμα σου",
+  },
+];
+
+export const appointment_steps_en = [
+  {
+    number: 1,
+    title: "Search",
+    description: "Βρες το κοντινότερο studio EMS",
+  },
+  {
+    number: 2,
+    title: "Schedule",
+    description:
+      "Κλείσε την 1η σου προπόνηση άμεσα και αξιόπιστα",
+  },
+  {
+    number: 3,
+    title: "Train",
+    description: "Ξεκίνα να βλέπεις και να νιώθεις τη διαφορά στο σώμα σου",
+  },
+];

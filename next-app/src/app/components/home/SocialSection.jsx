@@ -1,9 +1,9 @@
 export default function SocialSection() {
   return (
-    <section className="py-8">
+    <section className="pb-6">
       <div className="flex flex-col items-center gap-4">
         {/* top line */}
-        <div className="w-16 h-1 bg-black"></div>
+        {/*<div className="w-16 h-0.5 bg-black"></div>*/}
 
         {/* icons */}
         <div className="flex gap-4">
@@ -34,7 +34,7 @@ export default function SocialSection() {
         </div>
 
         {/* bottom line */}
-        <div className="w-16 h-1 bg-black"></div>
+        {/*<div className="w-16 h-0.5 bg-black"></div>*/}
       </div>
     </section>
   );
