@@ -1,113 +1,99 @@
-"use client";
+// app/book/studio/[slug]/page.jsx
+// NO "use client"
+import { prisma } from '@lib/prisma'
+import IntroSection from '../../../components/IntroSection'
+import FooterInfoStrip from '../../../components/FooterInfoStrip'
+import { MapPin, Phone, Mail, Clock, Dumbbell } from "lucide-react"
+import OfficePreview from '../../../components/book/OfficePreview'
+import { notFound } from 'next/navigation'
+import ServicesList from "../../../components/book/ServicesList";
+import ContactAndHours from "../../../components/book/ContactHours";
 
-import { useEffect, useMemo, useState } from "react";
-import IntroSection from "../../../components/IntroSection";
-import FooterInfoStrip from "../../../components/FooterInfoStrip";
-import TestimonialsCarousel from "../../../components/book/TestimonialsCarousel"; // your existing carousel
-import StudioInfoCards from "../../../components/book/StudioInfoCards";
-import OfficePreview from "../../../components/book/OfficePreview";
-import { studios as ALL_STUDIOS } from "../../../../../public/data/studios";
-import testimonials from "../../../../../public/data/testimonials";
+// Cache HTML for 10 minutes (tune as needed)
+export const revalidate = 600
 
-export default function StudioSlugPage({ params }) {
-  const { slug } = params || {};
-  const [locale, setLocale] = useState("el");
-
-  useEffect(() => {
-    const saved = typeof window !== "undefined" ? localStorage.getItem("locale") : null;
-    if (saved) setLocale(saved);
-  }, []);
-
-  const studio = useMemo(() => {
-    if (!slug) return null;
-    return ALL_STUDIOS.find((s) => s.slug === slug) || null;
-  }, [slug]);
-
-  // If later you want studio-specific testimonials:
-  // const studioTestimonials = testimonialsAll.filter(t => t.studioSlug === slug);
-
-  if (!studio) {
-    return (
-      <main className="min-h-screen flex items-center justify-center px-4">
-        <div className="text-center max-w-xl">
-          <h1 className="text-2xl font-semibold text-gray-800">
-            {locale === "en" ? "Studio not found" : "Το studio δεν βρέθηκε"}
-          </h1>
-          <p className="text-gray-600 mt-2">
-            {locale === "en"
-              ? "Please check the URL or choose another studio."
-              : "Έλεγξε το URL ή επίλεξε κάποιο άλλο studio."}
-          </p>
-        </div>
-      </main>
-    );
+function buildMapSrc(studio, locale = 'el') {
+  if (studio.lat && studio.lng) {
+    return `https://www.google.com/maps?q=${studio.lat},${studio.lng}&hl=${locale === 'en' ? 'en' : 'el'}&z=15&output=embed`
   }
+  if (studio.address) {
+    const q = encodeURIComponent(studio.address)
+    return `https://www.google.com/maps?q=${q}&hl=${locale === 'en' ? 'en' : 'el'}&z=15&output=embed`
+  }
+  return ''
+}
 
-  const mapSrc =
-    studio.mapEmbed ||
-    (studio.lat && studio.lng
-      ? `https://www.google.com/maps?q=${studio.lat},${studio.lng}&hl=${locale === "en" ? "en" : "el"}&z=15&output=embed`
-      : "");
+export default async function StudioSlugPage({ params }) {
+  const studio = await prisma.studio.findUnique({
+    where: { slug: params.slug },
+  })
+  if (!studio) return notFound()
+
+  const locale = 'el'
+  const mapSrc = buildMapSrc(studio, locale)
 
   return (
     <main className="flex flex-col">
-      {/* Intro with main photo */}
+      {/* Banner image with content below: name + address + CTA on right */}
       <IntroSection
-        image={studio.image}
-        title={<span className="block text-3xl sm:text-5xl leading-tight">{studio.name}</span>}
-        paragraph={<div className="max-w-3xl mx-auto text-gray-700">{studio.address}</div>}
-      />
+        image={studio.photoUrls?.[0]}
+        title={null}
+        paragraph={
+          <div className="max-w-5xl mx-auto w-full">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              {/* Left side: name + address */}
+              <div>
+                <h2 className="text-2xl sm:text-3xl font-semibold">{studio.name}</h2>
+                <p className="text-gray-700 mt-1 flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-blue-500"/>
+                  {studio.address}
+                </p>
+              </div>
 
-      {/* Contact + Hours cards */}
-      <section className="py-10 px-4">
-        <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <StudioInfoCards
-              locale={locale}
-              address={studio.address}
-              email={studio.email}
-              phones={studio.phones}
-              socials={studio.socials}
-              hours={studio.hours}
-            />
+              {/* Right side: button */}
+              <a
+                href={`/book/studio/${studio.slug}#book`}
+                className="btn self-start sm:self-auto"
+              >
+                Κλείσε Προπόνηση
+              </a>
+            </div>
           </div>
-        </div>
-      </section>
-
-      {/* Office preview (6 photos, no CTA) */}
-      <OfficePreview
-        locale={locale}
-        images={
-          Array.isArray(studio.gallery) && studio.gallery.length > 0
-            ? studio.gallery.slice(0, 6)
-            : []
         }
       />
 
-      {/* Testimonials (generic; wire per-studio later if desired) */}
-      <section className="py-10">
-        <TestimonialsCarousel />
-      </section>
+      <ContactAndHours studio={studio} />
 
-      {/* Full width map */}
-      {mapSrc && (
-        <section className="w-full">
-          <div className="w-full">
-            <iframe
-              src={mapSrc}
-              className="rounded-none md:rounded-lg w-full"
-              height="420"
-              style={{ border: 0 }}
-              allowFullScreen=""
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              title={studio.name}
-            />
-          </div>
+      {studio.services?.length > 0 && (
+        <section className="py-6">
+          <ServicesList services={studio.services} />
         </section>
       )}
 
-      <FooterInfoStrip locale={locale} />
+
+      {/* Office / gallery preview (first 6 images) */}
+      <OfficePreview
+        locale={locale}
+        images={studio.photoUrls?.slice(0, 6) || []}
+      />
+
+      {/* Full-width map */}
+      {mapSrc && (
+        <section className="w-full">
+          <iframe
+            src={mapSrc}
+            className="w-full"
+            height="420"
+            style={{border: 0}}
+            allowFullScreen
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            title={studio.name}
+          />
+        </section>
+      )}
+
+      <FooterInfoStrip locale={locale}/>
     </main>
-  );
+  )
 }

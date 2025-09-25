@@ -18,9 +18,9 @@ export default function OfficePreview({
     <section className="py-12">
       <div className="max-w-6xl mx-auto px-4">
         <div className="max-w-6xl mx-auto">
-          <h2 className="title-teal">{tTitle}</h2>
+          <h2 className="title-black">{tTitle}</h2>
           <div className="max-w-xl mb-8">
-            <p className="text-gray-700 text-lg">{tDesc}</p>
+            {/*<p className="text-gray-700 text-lg">{tDesc}</p>*/}
             {/* No CTA here by request */}
           </div>
         </div>

@@ -42,3 +42,4 @@ next-env.d.ts
 
 #sitemap
 /public/sitemap*.xml
+/src/generated/prisma
