@@ -1,16 +1,17 @@
 "use client";
-
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import IntroSection from "../components/IntroSection";
 import AboutSection from "../components/AboutSection";
 import FooterInfoStrip from "../components/FooterInfoStrip";
 import StepsSection from "../components/StepsSection";
 import LocationSearch from "../components/book/LocationForm";
 import { appointment_steps_el, appointment_steps_en } from "../../../public/data/steps";
-import HeroLocationSearch from "../components/book/LocationForm";
 
 export default function HomePage() {
   const [locale, setLocale] = useState("el");
+  const router = useRouter();
+
   useEffect(() => {
     const saved = localStorage.getItem("locale") || "el";
     setLocale(saved);
@@ -22,8 +23,15 @@ export default function HomePage() {
     // payload:
     //  - { mode: "manual", query: string }
     //  - { mode: "near", coords: { latitude, longitude } } OR { mode: "near", error: string }
-    // TODO: integrate search / schedule flow here
-    console.log("SEARCH:", payload);
+
+    if (payload?.mode === "near" && payload?.coords) {
+      const { latitude, longitude } = payload.coords;
+      router.push(`/book/results?mode=near&lat=${latitude}&lng=${longitude}`);
+      return;
+    }
+
+    const q = encodeURIComponent(payload?.query ?? "");
+    router.push(`/book/results?mode=manual&q=${q}`);
   };
 
   return (
@@ -31,13 +39,9 @@ export default function HomePage() {
       <IntroSection
         image="/images/general/25.jpg"
         title={"Κράτηση"}
-        paragraph={
-          <LocationSearch locale={locale} onSearch={handleFindStudios} />
-        }
+        paragraph={<LocationSearch locale={locale} onSearch={handleFindStudios} />}
       />
-
       <StepsSection steps={steps} />
-
       <div className="bg-blue-100">
         <AboutSection
           title="Για ιδιοκτήτες studio (B2B)"
@@ -52,7 +56,6 @@ export default function HomePage() {
           ctaLink="/contact"
         />
       </div>
-
       <FooterInfoStrip locale={locale} />
     </>
   );

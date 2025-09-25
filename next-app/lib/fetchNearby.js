@@ -1,12 +1,12 @@
-export async function fetchNearby({ lat, lng, radiusKm = 20, limit = 50 }) {
-  const url = new URL("/api/studios/nearby", window.location.origin);
-  url.searchParams.set("lat", lat);
-  url.searchParams.set("lng", lng);
-  url.searchParams.set("radiusKm", radiusKm);
-  url.searchParams.set("limit", limit);
-
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Nearby fetch failed: ${res.status}`);
-  const data = await res.json();
-  return data.results || [];
+export async function fetchNearby({ lat, lng, limit = 50, radiusKm }) {
+  const res = await fetch("/api/studios/nearby", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat, lng, limit, radiusKm }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || "Nearby fetch failed");
+  }
+  return res.json(); // can be [] or { items, radiusKm }
 }

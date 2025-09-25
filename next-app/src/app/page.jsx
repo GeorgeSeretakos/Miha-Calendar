@@ -28,6 +28,8 @@ export default function Home() {
   const pricingPackage = locale === "en" ? pricingPackage_en : pricingPackage_el;
   const services_preview = locale === "en" ? services_preview_en : services_preview_el;
 
+  console.log(process.env.NEXT_PUBLIC_MAPS_BROWSER_KEY);
+
   return (
     <main>
       {/* Intro Section */}

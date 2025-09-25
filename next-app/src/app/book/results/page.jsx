@@ -1,179 +1,166 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import LocationSearch from "../../components/book/LocationForm"; // or HeroLocationSearch
-import StudioCard from "../../components/book/StudioCard";
-import FooterInfoStrip from "../../components/FooterInfoStrip";
-import { studios as MOCK_STUDIOS } from "../../../../public/data/studios";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import dynamic from "next/dynamic";
 
-// Haversine distance (meters)
-function distanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
+import LocationSearch from "@components/book/LocationForm";
+import StudioCard from "@components/book/StudioCard";
+import FooterInfoStrip from "@components/FooterInfoStrip";
+import { fetchNearby } from "@lib/fetchNearby";
+
+// Avoid SSR for the Maps component
+const ResultsMap = dynamic(() => import("@components/map/ResultsMap"), { ssr: false });
 
 export default function ResultsPage() {
-  const [locale, setLocale] = useState("el");
-  useEffect(() => {
-    const saved = typeof window !== "undefined" ? localStorage.getItem("locale") : null;
-    if (saved) setLocale(saved);
-  }, []);
-
-  // Filters
-  const [mode, setMode] = useState("manual"); // 'manual' | 'near'
-  const [query, setQuery] = useState("");
+  // Mode can later be set from LocationSearch (e.g., "near" | "manual")
+  const [mode, setMode] = useState("near");
   const [coords, setCoords] = useState(null);
 
-  // Suggestions (optional)
-  const [suggestions, setSuggestions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [remoteStudios, setRemoteStudios] = useState([]);
+  const [radiusKm, setRadiusKm] = useState(null);
 
-  // Detect when left list reaches bottom to reveal full-width footer
-  const scrollRef = useRef(null);
-  const [showFooter, setShowFooter] = useState(false);
-
-  const handleLeftScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
-    setShowFooter(atBottom);
-  }, []);
+  // Example: use browser geolocation when user selects "near me"
+  useEffect(() => {
+    if (mode === "near" && !coords && typeof navigator !== "undefined") {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        },
+        () => setError("Δεν μπόρεσα να βρω την τοποθεσία σου."),
+        { enableHighAccuracy: true }
+      );
+    }
+  }, [mode, coords]);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.addEventListener("scroll", handleLeftScroll, { passive: true });
-    handleLeftScroll();
-    return () => el.removeEventListener("scroll", handleLeftScroll);
-  }, [handleLeftScroll]);
+    async function run() {
+      if (mode !== "near" || !coords) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetchNearby({
+          lat: coords.latitude,
+          lng: coords.longitude,
+          limit: 50,
+        });
 
-  // Filtered studios
-  const filteredStudios = useMemo(() => {
-    let arr = [...MOCK_STUDIOS];
-    if (mode === "manual" && query.trim()) {
-      const q = query.trim().toLowerCase();
-      arr = arr
-        .filter(
-          (s) =>
-            s.name.toLowerCase().includes(q) ||
-            s.address.toLowerCase().includes(q)
-        )
-        .map((s) => ({ ...s, distance: undefined }));
-    } else if (mode === "near" && coords) {
-      arr = arr
-        .map((s) => ({
-          ...s,
-          distance: distanceMeters(coords.latitude, coords.longitude, s.lat, s.lng),
-        }))
-        .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
-    } else {
-      arr = arr.map((s) => ({ ...s, distance: undefined }));
-    }
-    return arr;
-  }, [mode, query, coords]);
+        const items = Array.isArray(res) ? res : res?.items || [];
+        const usedRadiusKm = Array.isArray(res) ? null : res?.radiusKm || null;
+        if (usedRadiusKm != null) setRadiusKm(usedRadiusKm);
 
-  // Filter handlers
-  const onFilterSearch = useCallback((payload) => {
-    if (payload?.mode === "near" && payload?.coords) {
-      setMode("near");
-      setCoords(payload.coords);
-      setQuery("");
-    } else {
-      setMode("manual");
-      setCoords(null);
-      setQuery(payload?.query ?? "");
-    }
-  }, []);
+        const normalized = items
+          .map((r) => ({
+            ...r,
+            lat: Number.isFinite(r.lat) ? r.lat : r.latitude,
+            lng: Number.isFinite(r.lng) ? r.lng : r.longitude,
+            distance: typeof r.distance_km === "number" ? r.distance_km * 1000 : r.distance,
+            sway_distance:
+              typeof r.sway_distance_km === "number"
+                ? r.sway_distance_km * 1000
+                : r.sway_distance,
+          }))
+          .sort((a, b) => {
+            const da = Number.isFinite(a.distance) ? a.distance : Infinity;
+            const db = Number.isFinite(b.distance) ? b.distance : Infinity;
+            return da - db;
+          });
 
-  const onQueryChange = useCallback((text) => {
-    if (!text) return setSuggestions([]);
-    const lower = text.toLowerCase();
-    const uniq = new Map();
-    for (const s of MOCK_STUDIOS) {
-      if (s.address.toLowerCase().includes(lower)) uniq.set(s.address, { primary: s.address });
-      if (s.name.toLowerCase().includes(lower)) uniq.set(s.name, { primary: s.name });
-      if (uniq.size >= 8) break;
+        setRemoteStudios(normalized);
+      } catch (e) {
+        setError(e?.message || "Αποτυχία αναζήτησης κοντινών studios.");
+      } finally {
+        setLoading(false);
+      }
     }
-    setSuggestions(Array.from(uniq.values()));
-  }, []);
+    run();
+  }, [mode, coords]);
+
+  const studiosToRender = useMemo(() => remoteStudios, [remoteStudios]);
+  const mapCenter = coords ? { lat: coords.latitude, lng: coords.longitude } : null;
 
   return (
     <>
-      {/* MAIN GRID: two columns, full height; absolutely no x-scroll */}
-      <main className="grid grid-cols-2 w-full h-screen overflow-x-hidden">
-        {/* LEFT: Filters + Results (both inside the same scrollable container; search is NOT sticky) */}
-        <section className="h-screen flex flex-col border-r border-gray-200 bg-gray-50">
-          <div
-            ref={scrollRef}
-            className="flex-1 overflow-auto px-4 py-4 left-scroll"
-            style={{ msOverflowStyle: "none", scrollbarWidth: "none" }}
-          >
-            {/* Search/filter at top of the scrollable list (will scroll away) */}
-            <div className="mb-4">
-              <LocationSearch
-                locale={locale}
-                onSearch={onFilterSearch}
-                onQueryChange={onQueryChange}
-                suggestions={suggestions}
-                initialQuery={query}
-              />
+      <main className="min-h-screen w-full overflow-x-hidden flex flex-col">
+        {/* Map */}
+        <section className="relative w-full h-[60vh] bg-white overflow-hidden">
+          {mapCenter ? (
+            <ResultsMap
+              center={mapCenter}
+              studios={studiosToRender}
+              radiusKm={radiusKm || 0}
+              className="w-full h-full"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-sm text-gray-600">
+              Φόρτωση χάρτη…
             </div>
-
-            {/* Results grid: 2 per row */}
-            <div className="grid grid-cols-2 gap-4">
-              {filteredStudios.map((s) => (
-                <StudioCard key={s.id} studio={s} locale={locale} />
-              ))}
-            </div>
-
-            {/* Spacer to ensure reaching bottom feels natural */}
-            <div className="h-6" />
+          )}
+          <div className="absolute top-3 left-3 bg-white/90 backdrop-blur rounded-md shadow px-3 py-2 text-sm">
+            Χάρτης Studios
           </div>
         </section>
 
-        {/* RIGHT: Map column (fills height, no overflow x) */}
-        <section className="relative h-screen bg-white overflow-hidden">
-          <div className="absolute inset-0">
-            <div className="w-full h-full relative">
-              <div className="absolute inset-0 bg-[url('/images/general/map-placeholder.png')] bg-cover bg-center opacity-30" />
-              {filteredStudios.map((s, idx) => (
-                <div
-                  key={s.id}
-                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                  style={{
-                    top: `${20 + (idx * 70) / Math.max(filteredStudios.length, 1)}%`,
-                    left: `${30 + (idx * 50) / Math.max(filteredStudios.length, 1)}%`,
-                  }}
-                  title={s.name}
-                >
-                  <div className="w-4 h-4 rounded-full bg-[#1C86D1] border-2 border-white shadow" />
-                </div>
-              ))}
-            </div>
-            <div className="absolute top-3 left-3 bg-white/90 backdrop-blur rounded-md shadow px-3 py-2 text-sm">
-              {locale === "en" ? "Studios Map" : "Χάρτης Studios"}
-            </div>
+        {/* Controls */}
+        <section className="w-full border-b border-gray-200 bg-gray-50">
+          <div className="max-w-6xl mx-auto px-4 py-4">
+            <LocationSearch
+              onSearch={(next) => {
+                // Example: update mode/coords when user searches manually
+                if (next?.mode) setMode(next.mode);
+                if (next?.coords) setCoords(next.coords);
+              }}
+            />
+          </div>
+        </section>
+
+        {/* Results list */}
+        <section className="w-full flex-1 bg-gray-50">
+          <div className="max-w-6xl mx-auto px-4 py-4">
+            {loading && (
+              <p className="px-2 py-2 text-sm text-gray-600">
+                Φόρτωση κοντινών studios…
+              </p>
+            )}
+            {error && <p className="px-2 py-2 text-sm text-red-600">{error}</p>}
+
+            {!loading && studiosToRender.length === 0 ? (
+              <div className="px-2 py-8 text-sm text-gray-600">
+                Δεν βρέθηκαν studios κοντά σε αυτή την τοποθεσία.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {studiosToRender.map((s) => {
+                  const href = s?.slug ? `/book/studio/${s.slug}` : undefined;
+                  return (
+                    <div key={s.id ?? `${s.lat}-${s.lng}`}>
+                      {href ? (
+                        <Link href={href} className="block group">
+                          <StudioCard studio={s} />
+                        </Link>
+                      ) : (
+                        <StudioCard studio={s} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </section>
       </main>
 
-      {/* FULL-WIDTH FOOTER: appears only when left column bottom is reached */}
-      {showFooter && <FooterInfoStrip locale={locale} />}
-
-      {/* Hide WebKit scrollbar ONLY for the left results scroller + kill x-axis scroll app-wide */}
+      <FooterInfoStrip />
       <style jsx global>{`
-        html, body {
-          overflow-x: hidden; /* hard stop on horizontal scroll */
+        html,
+        body {
+          overflow-x: hidden;
           width: 100%;
-        }
-        .left-scroll::-webkit-scrollbar {
-          display: none;
         }
       `}</style>
     </>

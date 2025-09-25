@@ -1,29 +1,38 @@
 "use client";
 
 export default function StudioCard({
-                                     studio = {},
-                                     locale = "el",
-                                     onClick, // optional
-                                   }) {
-  const name = studio.name || (locale === "en" ? "EMS Studio" : "Studio EMS");
-  const image = studio.image || "/images/general/placeholder.jpg";
-  const address = studio.address || (locale === "en" ? "Unknown location" : "Άγνωστη τοποθεσία");
-  const distance = typeof studio.distance === "number" ? studio.distance : null;
+studio = {},
+onClick,
+}) {
+  const name = studio.name || "Studio EMS";
+  const image = studio.photoUrls?.[0];
+  const address = studio.address || "Άγνωστη τοποθεσία";
 
+  // Ευθεία απόσταση
+  const distance = typeof studio.distance === "number" ? studio.distance : null;
   const distanceLabel =
     distance != null
       ? distance < 1000
-        ? `${Math.round(distance)} m`
-        : `${(distance / 1000).toFixed(1)} km`
+        ? `${Math.round(distance)} μ`
+        : `${(distance / 1000).toFixed(1)} χλμ`
+      : null;
+
+  // Απόσταση κίνησης (sway distance)
+  const sway = typeof studio.sway_distance === "number" ? studio.sway_distance : null;
+  const swayLabel =
+    sway != null
+      ? sway < 1000
+        ? `${Math.round(sway)} μ`
+        : `${(sway / 1000).toFixed(1)} χλμ`
       : null;
 
   return (
     <div
-      className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-64" // fixed height like BlogCard
+      className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-64"
       onClick={onClick}
       role={onClick ? "button" : undefined}
     >
-      {/* Image: ~50% of card height */}
+      {/* Εικόνα */}
       <div className="relative w-full h-[50%]">
         <img
           src={image}
@@ -33,16 +42,17 @@ export default function StudioCard({
         />
       </div>
 
-      {/* Content: ~50% */}
+      {/* Περιεχόμενο */}
       <div className="flex flex-col flex-1 p-4">
-        <h4 className="text-gray-900 font-semibold leading-tight line-clamp-2">{name}</h4>
+        <h4 className="text-gray-900 font-semibold leading-tight line-clamp-2">
+          {name}
+        </h4>
         <p className="text-sm text-gray-600 mt-1 line-clamp-2">{address}</p>
 
-        {distanceLabel && (
-          <p className="mt-auto text-sm font-medium text-gray-800">
-            {locale === "en" ? "Distance:" : "Απόσταση:"} {distanceLabel}
-          </p>
-        )}
+        <div className="mt-auto space-y-1 text-sm font-medium text-gray-800">
+          {distanceLabel && <p>{distanceLabel} μακριά</p>}
+          {swayLabel && <p>{swayLabel} μακριά</p>}
+        </div>
       </div>
     </div>
   );

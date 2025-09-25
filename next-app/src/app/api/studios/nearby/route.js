@@ -2,16 +2,22 @@ import { NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
+const DEFAULT_RADIUS_KM =
+  Number(process.env.SEARCH_RADIUS_KM) > 0 ? Number(process.env.SEARCH_RADIUS_KM) : 25;
+
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const lat = Number(searchParams.get("lat"));
   const lng = Number(searchParams.get("lng"));
-  const radiusKm = Number(searchParams.get("radiusKm") ?? 20); // default 20km
+  const qRadius = Number(searchParams.get("radiusKm"));
   const limit = Number(searchParams.get("limit") ?? 50);
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return NextResponse.json({ error: "lat & lng are required numbers" }, { status: 400 });
   }
+
+  // default από .env όταν δεν υπάρχει/είναι άκυρο το query param
+  const radiusKm = Number.isFinite(qRadius) && qRadius > 0 ? qRadius : DEFAULT_RADIUS_KM;
 
   const rows = await prisma.$queryRaw`
     SELECT *
@@ -30,5 +36,6 @@ export async function GET(req) {
     LIMIT ${limit};
   `;
 
-  return NextResponse.json({ results: rows });
+  // Προαιρετικά επιστρέφουμε και τι radius χρησιμοποιήθηκε
+  return NextResponse.json({ results: rows, radiusKm });
 }
