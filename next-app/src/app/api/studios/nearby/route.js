@@ -1,24 +1,22 @@
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
+
+// Reuse Prisma across invocations (serverless-friendly)
+const globalForPrisma = globalThis;
+const prisma = globalForPrisma.prisma || new PrismaClient();
+if (!globalForPrisma.prisma) globalForPrisma.prisma = prisma;
 
 const DEFAULT_RADIUS_KM =
   Number(process.env.SEARCH_RADIUS_KM) > 0 ? Number(process.env.SEARCH_RADIUS_KM) : 25;
 
-export async function GET(req) {
-  const { searchParams } = new URL(req.url);
-  const lat = Number(searchParams.get("lat"));
-  const lng = Number(searchParams.get("lng"));
-  const qRadius = Number(searchParams.get("radiusKm"));
-  const limit = Number(searchParams.get("limit") ?? 50);
+// --- Helpers ---
+function normalizeNumber(n, fallback = undefined) {
+  const v = Number(n);
+  return Number.isFinite(v) ? v : fallback;
+}
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return NextResponse.json({ error: "lat & lng are required numbers" }, { status: 400 });
-  }
-
-  // default από .env όταν δεν υπάρχει/είναι άκυρο το query param
-  const radiusKm = Number.isFinite(qRadius) && qRadius > 0 ? qRadius : DEFAULT_RADIUS_KM;
-
+async function queryNearby({ lat, lng, radiusKm, limit }) {
+  // Haversine (km) on Postgres via $queryRaw
   const rows = await prisma.$queryRaw`
     SELECT *
     FROM (
@@ -35,7 +33,30 @@ export async function GET(req) {
     ORDER BY t.distance_km ASC
     LIMIT ${limit};
   `;
+  return rows;
+}
 
-  // Προαιρετικά επιστρέφουμε και τι radius χρησιμοποιήθηκε
-  return NextResponse.json({ results: rows, radiusKm });
+// --- POST: preferred for your client ---
+export async function POST(req) {
+  try {
+    const body = await req.json().catch(() => ({}));
+
+    const lat = normalizeNumber(body.lat);
+    const lng = normalizeNumber(body.lng);
+    const limit = normalizeNumber(body.limit, 50);
+    const qRadius = normalizeNumber(body.radiusKm);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return NextResponse.json({ error: "lat & lng are required numbers" }, { status: 400 });
+    }
+
+    const radiusKm = Number.isFinite(qRadius) && qRadius > 0 ? qRadius : DEFAULT_RADIUS_KM;
+
+    const items = await queryNearby({ lat, lng, radiusKm, limit });
+
+    // Return the shape your client expects
+    return NextResponse.json({ items, radiusKm });
+  } catch (err) {
+    console.error("POST /api/studios/nearby failed:", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
 }

@@ -1,12 +1,22 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Loader } from "@googlemaps/js-api-loader";
+import {loadGoogleMaps} from "@lib/loadGoogleMaps";
 
+/**
+ * ResultsMap
+ * Props:
+ *  - active: boolean                         // if false, the map never initializes (saves quota)
+ *  - center?: { lat: number, lng: number }   // user/search location
+ *  - studios?: Array<{ id?: string|number, name?: string, lat: number, lng: number }>
+ *  - radiusKm?: number                        // optional radius (km)
+ *  - className?: string
+ */
 export default function ResultsMap({
-center,          // { lat, lng } – the search location (e.g., "near me")
-studios = [],    // [{ id, name, lat, lng }, ...]
-radiusKm = 0,    // optional: draw search radius
+active = false,
+center = null,
+studios = [],
+radiusKm = 0,
 className = "w-full h-[60vh] rounded-2xl overflow-hidden",
 }) {
   const mapRef = useRef(null);
@@ -15,7 +25,7 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
   const circleRef = useRef(null);
   const userMarkerRef = useRef(null);
 
-  // Helper: clear all studio markers
+  // ---- helpers ----
   const clearMarkers = () => {
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
@@ -31,7 +41,6 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
   const setUserMarker = () => {
     if (!map.current || !center) return;
 
-    // Custom simple SVG for the search location (blue dot with white ring)
     const userIcon = {
       path: "M16 8a8 8 0 1 1-16 0a8 8 0 0 1 16 0Z",
       fillColor: "#1E90FF",
@@ -44,16 +53,23 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
 
     if (userMarkerRef.current) {
       userMarkerRef.current.setPosition(center);
-      return;
+      userMarkerRef.current.setMap(map.current);
+    } else {
+      userMarkerRef.current = new google.maps.Marker({
+        position: center,
+        map: map.current,
+        title: "Search location",
+        icon: userIcon,
+        zIndex: 9999,
+      });
     }
+  };
 
-    userMarkerRef.current = new google.maps.Marker({
-      position: center,
-      map: map.current,
-      title: "Search location",
-      icon: userIcon,
-      zIndex: 9999,
-    });
+  const removeUserMarker = () => {
+    if (userMarkerRef.current) {
+      userMarkerRef.current.setMap(null);
+      userMarkerRef.current = null;
+    }
   };
 
   const drawRadius = () => {
@@ -74,15 +90,24 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
     });
   };
 
+  const studioIcon = () => ({
+    url: "/icons/pin.png", // /public/icons/pin.png
+    scaledSize: new google.maps.Size(36, 36),
+    anchor: new google.maps.Point(18, 36),
+  });
+
   const placeStudioMarkers = () => {
     if (!map.current) return;
 
     clearMarkers();
     const info = new google.maps.InfoWindow();
     const bounds = new google.maps.LatLngBounds();
+    let hasAny = false;
 
-    // Include the search center in bounds
-    if (center) bounds.extend(center);
+    if (center) {
+      bounds.extend(center);
+      hasAny = true;
+    }
 
     studios.forEach((s) => {
       const pos = { lat: Number(s.lat), lng: Number(s.lng) };
@@ -92,29 +117,20 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
         position: pos,
         map: map.current,
         title: s.name || "Studio",
-        // Slightly different color from default pin
-        icon: {
-          path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-          scale: 5,
-          fillColor: "#EA4335", // Google red
-          fillOpacity: 1,
-          strokeColor: "#B3261E",
-          strokeWeight: 1,
-        },
+        icon: studioIcon(),
       });
 
       marker.addListener("click", () => {
-        const html = `<div style="font-weight:600">${s.name || "Studio"}</div>`;
-        info.setContent(html);
+        info.setContent(`<div style="font-weight:600">${s.name || "Studio"}</div>`);
         info.open({ anchor: marker, map: map.current });
       });
 
       markersRef.current.push(marker);
       bounds.extend(pos);
+      hasAny = true;
     });
 
-    // Fit bounds (cap max zoom)
-    if (!bounds.isEmpty()) {
+    if (hasAny && !bounds.isEmpty()) {
       map.current.fitBounds(bounds);
       google.maps.event.addListenerOnce(map.current, "bounds_changed", () => {
         const z = map.current.getZoom();
@@ -123,61 +139,63 @@ className = "w-full h-[60vh] rounded-2xl overflow-hidden",
     }
   };
 
-  // Initialize map once
+// ---------- init once ----------
   useEffect(() => {
+    if (!active) return; // DO NOT load Google Maps when inactive (saves quota)
+
     let mounted = true;
 
-    console.log("NEXT_PUBLIC_MAPS_BROWSER_KEY: ", process.env.NEXT_PUBLIC_MAPS_BROWSER_KEY);
-    console.log("NEXT_PUBLIC_BASE_URL: ", process.env.NEXT_PUBLIC_BASE_URL);
-
-    const loader = new Loader({
-      apiKey: process.env.NEXT_PUBLIC_MAPS_BROWSER_KEY,
-      version: "weekly",
-    });
-
     (async () => {
-      await loader.load();
+      // Load the SDK once (with Places) via our singleton
+      if (!window.google?.maps) {
+        await loadGoogleMaps();
+      }
       if (!mounted || !mapRef.current) return;
 
       map.current = new google.maps.Map(mapRef.current, {
-        center: center || { lat: 37.9838, lng: 23.7275 }, // Athens fallback
-        zoom: 13,
+        center: center || { lat: 38.5, lng: 23.7 }, // sensible default; will re-fit with markers
+        zoom: center ? 13 : 6,
         streetViewControl: false,
         fullscreenControl: true,
         mapTypeControl: false,
       });
 
-      setUserMarker();
+      if (center) setUserMarker();
       drawRadius();
-      placeStudioMarkers();
+      if (center || (studios && studios.length > 0)) {
+        placeStudioMarkers();
+      }
     })();
 
     return () => {
       mounted = false;
       clearMarkers();
       clearCircle();
-      if (userMarkerRef.current) {
-        userMarkerRef.current.setMap(null);
-        userMarkerRef.current = null;
-      }
+      removeUserMarker();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // init once
+  }, [active]); // initialize only when becoming active
 
-  // Update on center / studios / radius changes
+
+  // ---------- react to prop changes ----------
   useEffect(() => {
-    if (!map.current) return;
+    if (!active || !map.current) return;
+
+    const hasStudios = Array.isArray(studios) && studios.length > 0;
 
     if (center) {
       map.current.setCenter(center);
+      if (!hasStudios) map.current.setZoom(13);
       setUserMarker();
+    } else {
+      removeUserMarker();
     }
 
     drawRadius();
     placeStudioMarkers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [center?.lat, center?.lng, radiusKm, JSON.stringify(studios)]);
+  }, [active, center?.lat, center?.lng, radiusKm, JSON.stringify(studios)]);
 
-
+  if (!active) return null; // render nothing (parent shows the static image)
   return <div ref={mapRef} className={className} />;
 }

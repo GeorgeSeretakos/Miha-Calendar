@@ -8,5 +8,5 @@ export async function fetchNearby({ lat, lng, limit = 50, radiusKm }) {
     const text = await res.text().catch(() => "");
     throw new Error(text || "Nearby fetch failed");
   }
-  return res.json(); // can be [] or { items, radiusKm }
+  return res.json();
 }

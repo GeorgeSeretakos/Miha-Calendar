@@ -1,54 +1,68 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { loadGoogleMaps } from "@lib/loadGoogleMaps";
 
 /**
- * Centered hero search:
- *  - Title on top (dark gray)
- *  - "Where?" combobox + Search button (stack on mobile, inline on ≥sm)
- *  - Description below (dark gray)
+ * HeroLocationSearch with Google Places Autocomplete (custom dropdown)
  *
- * Props:
- *  - locale: "el" | "en"
- *  - onSearch: (payload) => void
- *      payload: { mode:"manual", query:string } | { mode:"near", coords? , error? }
- *  - onQueryChange?: (q:string) => void    // use to fetch suggestions
- *  - suggestions?: Array<{ id?: string|number, primary:string, secondary?:string }>
+ * Emits:
+ *  - onSearch({ mode:"near", coords?, error? })
+ *  - onSearch({ mode:"manual", coords: { latitude, longitude }, address })
+ *  - onSearch({ mode:"manual", query })  // when user types but doesn't pick suggestion
  */
-export default function HeroLocationSearch({
-                                             locale = "el",
-                                             onSearch,
-                                             onQueryChange,
-                                             suggestions = [],
-                                           }) {
-  const t = locale === "en"
-    ? {
-      title: "Book your first EMS session — fast and easy.",
-      where: "Where?",
-      addressPh: "Address",
-      near: "Near Me",
-      search: "Search",
-      desc: "Type an area or choose “Near Me” for automatic detection.",
-    }
-    : {
-      title: "Κλείσε τώρα την 1η σου προπόνηση EMS — εύκολα και γρήγορα.",
-      where: "Που;",
-      addressPh: "Διεύθυνση",
-      near: "Κοντά μου",
-      search: "Αναζήτηση",
-      desc: "Πληκτρολόγησε περιοχή ή επίλεξε «Κοντά μου» για αυτόματο εντοπισμό.",
-    };
+export default function HeroLocationSearch({ onSearch }) {
+  const t = {
+    title: "Κλείσε τώρα την 1η σου προπόνηση EMS — εύκολα και γρήγορα.",
+    where: "Πού;",
+    addressPh: "Διεύθυνση",
+    near: "Κοντά μου",
+    search: "Αναζήτηση",
+    desc: "Πληκτρολόγησε περιοχή ή επίλεξε «Κοντά μου» για αυτόματο εντοπισμό.",
+    locating: "Εντοπισμός…",
+    geoNotSupported: "Η συσκευή δεν υποστηρίζει εντοπισμό τοποθεσίας.",
+    geoFailed: "Αποτυχία εντοπισμού τοποθεσίας.",
+  };
 
   const primaryBlue = "#1C86D1";
 
   // Combobox state
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [displayValue, setDisplayValue] = useState(""); // what shows in collapsed field
+  const [displayValue, setDisplayValue] = useState(""); // shows in collapsed field
   const [mode, setMode] = useState("manual"); // 'manual' | 'near'
+  const [nearLoading, setNearLoading] = useState(false); // NEW: show spinner/state while locating
+
+  // Google Places state
+  const [ready, setReady] = useState(false);
+  const [predictions, setPredictions] = useState([]);
+  const gAutocomplete = useRef(null);
+  const gPlaces = useRef(null);
+  const gSession = useRef(null);
+  const debounceT = useRef(null);
 
   const boxRef = useRef(null);
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      await loadGoogleMaps();
+      if (cancelled) return;
+
+      gAutocomplete.current = new google.maps.places.AutocompleteService();
+      gPlaces.current = new google.maps.places.PlacesService(
+        document.createElement("div")
+      );
+      gSession.current = new google.maps.places.AutocompleteSessionToken();
+      setReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Close on outside/Esc
   useEffect(() => {
@@ -69,52 +83,190 @@ export default function HeroLocationSearch({
     if (open && inputRef.current) inputRef.current.focus();
   }, [open]);
 
+  // Fetch predictions (debounced)
+  useEffect(() => {
+    if (!ready || !gAutocomplete.current) return;
+    if (!open) return;
+
+    if (debounceT.current) clearTimeout(debounceT.current);
+    debounceT.current = setTimeout(() => {
+      const q = query.trim();
+      if (!q) {
+        setPredictions([]);
+        return;
+      }
+
+      gAutocomplete.current.getPlacePredictions(
+        {
+          input: q,
+          componentRestrictions: { country: "gr" },
+          types: ["geocode"],
+          sessionToken: gSession.current,
+        },
+        (res, status) => {
+          if (
+            status !== google.maps.places.PlacesServiceStatus.OK ||
+            !res
+          ) {
+            setPredictions([]);
+            return;
+          }
+          const items = res.map((p) => ({
+            id: p.place_id,
+            place_id: p.place_id,
+            primary: p.structured_formatting?.main_text || p.description,
+            secondary: p.structured_formatting?.secondary_text || "",
+            description: p.description,
+          }));
+          setPredictions(items);
+        }
+      );
+    }, 250);
+
+    return () => {
+      if (debounceT.current) clearTimeout(debounceT.current);
+    };
+  }, [ready, open, query]);
+
+  // Helpers
+  const resolvePlaceIdToCoords = (place_id) =>
+    new Promise((resolve, reject) => {
+      if (!gPlaces.current)
+        return reject(new Error("PlacesService not ready"));
+      gPlaces.current.getDetails(
+        {
+          placeId: place_id,
+          fields: ["geometry", "formatted_address"],
+          sessionToken: gSession.current,
+        },
+        (place, status) => {
+          if (
+            status !== google.maps.places.PlacesServiceStatus.OK ||
+            !place ||
+            !place.geometry
+          ) {
+            return reject(
+              new Error("Δεν βρέθηκαν συντεταγμένες για αυτή τη διεύθυνση.")
+            );
+          }
+          const lat = place.geometry.location.lat();
+          const lng = place.geometry.location.lng();
+          resolve({
+            coords: { latitude: lat, longitude: lng },
+            address: place.formatted_address,
+          });
+        }
+      );
+    });
+
   // Actions
+
+  // UPDATED: auto-trigger search on "Κοντά μου"
   const handleNearMePick = () => {
     setMode("near");
     setDisplayValue(t.near);
     setOpen(false);
+
+    if (!navigator.geolocation) {
+      onSearch?.({ mode: "near", error: t.geoNotSupported });
+      return;
+    }
+
+    setNearLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setNearLoading(false);
+        const { latitude, longitude } = pos.coords || {};
+        if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          onSearch?.({ mode: "near", coords: { latitude, longitude } });
+        } else {
+          onSearch?.({ mode: "near", error: t.geoFailed });
+        }
+      },
+      (err) => {
+        setNearLoading(false);
+        onSearch?.({
+          mode: "near",
+          error: err?.message || t.geoFailed,
+        });
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
   };
 
-  const handleSuggestionPick = (text) => {
-    setMode("manual");
-    setDisplayValue(text);
-    setQuery(text);
-    setOpen(false);
-  };
+  const handleSuggestionPick = async (item) => {
+    try {
+      setMode("manual");
+      setDisplayValue(item.description || item.primary);
+      setQuery(item.description || item.primary);
+      setOpen(false);
 
-  const handleSearch = () => {
-    if (mode === "near") {
-      if (!navigator.geolocation) {
-        onSearch?.({ mode: "near", error: "Geolocation not supported" });
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) =>
-          onSearch?.({
-            mode: "near",
-            coords: { latitude: pos.coords.latitude, longitude: pos.coords.longitude },
-          }),
-        (err) => onSearch?.({ mode: "near", error: err?.message || "Geolocation failed" }),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-      );
-    } else {
-      const q = (displayValue || query).trim();
-      onSearch?.({ mode: "manual", query: q });
+      const { coords, address } = await resolvePlaceIdToCoords(item.place_id);
+      gSession.current = new google.maps.places.AutocompleteSessionToken();
+      onSearch?.({ mode: "manual", coords, address });
+    } catch (err) {
+      console.warn(err);
     }
   };
 
-  return (
-    <section className="w-full flex items-center justify-center px-4 mx-auto py-8 border-b-1">
-      <div className="w-full max-w-4xl">
-        {/* Title (darker grayscale) */}
-        <h3 className="text-center text-gray-800 mb-4">
-          {t.title}
-        </h3>
+  const handleSearch = async () => {
+    if (mode === "near") {
+      // If user presses the main button while "near" is selected,
+      // we re-attempt geolocation (useful if they denied first time).
+      if (!navigator.geolocation) {
+        onSearch?.({ mode: "near", error: t.geoNotSupported });
+        return;
+      }
+      setNearLoading(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setNearLoading(false);
+          onSearch?.({
+            mode: "near",
+            coords: {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+            },
+          });
+        },
+        (err) => {
+          setNearLoading(false);
+          onSearch?.({
+            mode: "near",
+            error: err?.message || t.geoFailed,
+          });
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+      return;
+    }
 
-        {/* Search row (stack on mobile, inline on ≥sm) */}
+    const q = (displayValue || query).trim();
+    if (!q) return;
+
+    const top = predictions[0];
+    if (top?.place_id) {
+      try {
+        const { coords, address } = await resolvePlaceIdToCoords(top.place_id);
+        gSession.current = new google.maps.places.AutocompleteSessionToken();
+        onSearch?.({ mode: "manual", coords, address });
+        return;
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    onSearch?.({ mode: "manual", query: q });
+  };
+
+  return (
+    <section className="w-full flex items-center justify-center px-4 mx-auto py-8">
+      <div className="w-full max-w-4xl">
+        <h3 className="text-center text-gray-800 mb-4">{t.title}</h3>
+
+        {/* Search row */}
         <div className="flex flex-col sm:flex-row items-stretch gap-3 justify-center max-w-xl mx-auto">
-          {/* Combobox (matches your screenshots) */}
+          {/* Combobox */}
           <div ref={boxRef} className="relative w-full sm:max-w-2xl">
             {/* Collapsed field */}
             <button
@@ -129,7 +281,11 @@ export default function HeroLocationSearch({
               }}
             >
               <div className="flex items-center justify-between">
-                <span className={`truncate ${displayValue ? "text-gray-900" : "text-gray-400"}`}>
+                <span
+                  className={`truncate ${
+                    displayValue ? "text-gray-900" : "text-gray-400"
+                  }`}
+                >
                   {displayValue || t.where}
                 </span>
                 <svg
@@ -137,7 +293,6 @@ export default function HeroLocationSearch({
                   height="16"
                   viewBox="0 0 20 20"
                   fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
                   className="ml-2 shrink-0"
                 >
                   <path
@@ -158,7 +313,7 @@ export default function HeroLocationSearch({
                 style={{ borderColor: "#E5E7EB" }}
                 role="listbox"
               >
-                {/* Address input — placeholder only, no label */}
+                {/* Address input */}
                 <div className="p-3 pb-2">
                   <input
                     ref={inputRef}
@@ -168,38 +323,37 @@ export default function HeroLocationSearch({
                       setMode("manual");
                       setQuery(e.target.value);
                       setDisplayValue(e.target.value);
-                      onQueryChange?.(e.target.value);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
                         setOpen(false);
+                        handleSearch();
                       }
                     }}
                     placeholder={t.addressPh}
                     className="w-full h-10 rounded-md border px-3 text-sm bg-white"
                     style={{
-                      borderColor: "#E0E7FF", // subtle violet border
-                      boxShadow: "0 0 0 2px rgba(109, 114, 255, 0.25)", // soft focus glow
+                      borderColor: "#E0E7FF",
+                      boxShadow: "0 0 0 2px rgba(109, 114, 255, 0.25)",
                       outline: "none",
                     }}
                   />
                 </div>
 
-                {/* Near Me row — immediately after input, no extra spacing */}
+                {/* Near Me */}
                 <button
                   type="button"
                   onClick={handleNearMePick}
-                  className="w-full flex items-center gap-2 px-4 py-3 text-sm bg-white hover:bg-gray-50"
+                  disabled={nearLoading}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm bg-white hover:bg-gray-50 disabled:opacity-60"
                   title={t.near}
                 >
-                  {/* navigation icon */}
                   <svg
                     width="18"
                     height="18"
                     viewBox="0 0 24 24"
                     fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
                     className="shrink-0"
                   >
                     <path
@@ -210,26 +364,26 @@ export default function HeroLocationSearch({
                       strokeLinejoin="round"
                     />
                   </svg>
-                  <span className="text-gray-900">{t.near}</span>
+                  <span className="text-gray-900">
+                    {nearLoading ? t.locating : t.near}
+                  </span>
                 </button>
 
-                {/* Results list — directly below Near Me */}
-                {Array.isArray(suggestions) && suggestions.length > 0 && (
+                {/* Predictions */}
+                {Array.isArray(predictions) && predictions.length > 0 && (
                   <ul className="max-h-72 overflow-auto">
-                    {suggestions.map((s, i) => (
+                    {predictions.map((s, i) => (
                       <li key={s.id ?? i}>
                         <button
                           type="button"
-                          onClick={() => handleSuggestionPick(s.primary)}
+                          onClick={() => handleSuggestionPick(s)}
                           className="w-full flex items-center gap-2 px-4 py-3 text-sm hover:bg-gray-50 text-left"
                         >
-                          {/* pin icon */}
                           <svg
                             width="18"
                             height="18"
                             viewBox="0 0 24 24"
                             fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
                             className="shrink-0"
                           >
                             <path
@@ -250,7 +404,9 @@ export default function HeroLocationSearch({
                           <span className="text-gray-900">
                             {s.primary}
                             {s.secondary ? (
-                              <span className="ml-2 text-gray-400">{s.secondary}</span>
+                              <span className="ml-2 text-gray-400">
+                                {s.secondary}
+                              </span>
                             ) : null}
                           </span>
                         </button>
@@ -262,11 +418,12 @@ export default function HeroLocationSearch({
             )}
           </div>
 
-          {/* Search button (unchanged style) — full width on mobile, auto on ≥sm */}
+          {/* Search button */}
           <button
             type="button"
             onClick={handleSearch}
-            className="h-12 px-6 rounded-xl hover:cursor-pointer font-semibold text-white whitespace-nowrap flex items-center gap-2 border-2 w-full sm:w-auto justify-center"
+            disabled={nearLoading}
+            className="h-12 px-6 rounded-xl hover:cursor-pointer font-semibold text-white whitespace-nowrap flex items-center gap-2 border-2 w-full sm:w-auto justify-center disabled:opacity-60"
             style={{ backgroundColor: primaryBlue, borderColor: "white" }}
           >
             <svg
@@ -274,20 +431,22 @@ export default function HeroLocationSearch({
               height="18"
               viewBox="0 0 24 24"
               fill="none"
-              xmlns="http://www.w3.org/2000/svg"
               className="shrink-0"
             >
               <circle cx="11" cy="11" r="7" stroke="white" strokeWidth="2" />
-              <path d="M20 20l-3.5-3.5" stroke="white" strokeWidth="2" strokeLinecap="round" />
+              <path
+                d="M20 20l-3.5-3.5"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
             </svg>
             {t.search}
           </button>
         </div>
 
-        {/* Description (darker grayscale) */}
-        <p className="mt-3 text-center text-sm text-gray-700">
-          {t.desc}
-        </p>
+        {/* Description */}
+        <p className="mt-3 text-center text-sm text-gray-700">{t.desc}</p>
       </div>
     </section>
   );
