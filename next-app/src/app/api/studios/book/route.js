@@ -101,24 +101,10 @@ export async function POST(req) {
     }
 
     // 2) Create the event on the booking calendar
-    const ownerCalendarEmail = studio.calendarConnection.calendarId; // often the owner's email
-    const possibleOwnerEmails = [
-      ownerCalendarEmail,
-      studio.email, // <- include studio.email for owner notification
-    ].filter(isEmail);
-
-    // de-dupe emails (case-insensitive)
-    const seen = new Set();
-    const uniqueOwnerEmails = possibleOwnerEmails.filter(e => {
-      const key = e.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
+    // ONLY use studio.email for owner notifications
     const attendees = [
       { email: customerEmail, displayName: `${firstName} ${lastName}`.trim() },
-      ...uniqueOwnerEmails.map(e => ({ email: e })),
+      ...(isEmail(studio.email) ? [{ email: studio.email }] : []),
     ];
 
     const summary = `Miha Bodytec Appointment — ${firstName} ${lastName}`;
