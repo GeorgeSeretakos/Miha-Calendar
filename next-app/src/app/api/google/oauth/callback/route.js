@@ -5,21 +5,23 @@ import { cookies } from "next/headers";
 import { exchangeCodeForTokens, googleApiGet } from "@lib/googleAuth";
 import { prisma } from "@lib/prisma";
 
-function buildSafeBase(req) {
-  // Prefer explicit base from env if provided (e.g., https://miha-calendar.netlify.app)
+function getSafeBaseUrl(req) {
+  // Prefer explicit base from env (e.g., https://miha-calendar.netlify.app)
   const envBase = process.env.NEXT_PUBLIC_BASE_URL;
   if (envBase && /^https?:\/\//i.test(envBase)) {
     const u = new URL(envBase);
-    // Always force https in production
     if (process.env.NODE_ENV === "production") u.protocol = "https:";
-    u.port = ""; // no explicit port
-    return u;
+    u.port = ""; // remove :80 etc
+    return u.toString();
   }
-  // Fallback: derive from the incoming request and normalize
+  // Fallback: derive from request origin, force https and strip port
   const u = new URL(req.url);
   u.protocol = "https:";
-  u.port = ""; // strip :80 etc.
-  return u;
+  u.port = "";
+  u.pathname = "/";
+  u.search = "";
+  u.hash = "";
+  return u.toString();
 }
 
 export async function GET(req) {
@@ -27,7 +29,6 @@ export async function GET(req) {
   const code = url.searchParams.get("code");
   const stateStr = url.searchParams.get("state") || "";
 
-  // Parse state (studioId + nonce) from start route
   const state = new URLSearchParams(stateStr);
   const studioId = state.get("studioId");
   const stateNonce = state.get("nonce");
@@ -53,7 +54,6 @@ export async function GET(req) {
         ? new Date(tokens.expiry_date)
         : new Date(Date.now() + (tokens.expires_in || 0) * 1000);
 
-    // Upsert connection — don't overwrite refreshToken with null/undefined
     await prisma.calendarConnection.upsert({
       where: { studioId },
       update: {
@@ -71,7 +71,7 @@ export async function GET(req) {
       },
     });
 
-    // Optional: auto-select primary calendar
+    // Optional, non-fatal: auto-select primary calendar
     try {
       const calendars = await googleApiGet(
         "https://www.googleapis.com/calendar/v3/users/me/calendarList",
@@ -88,15 +88,9 @@ export async function GET(req) {
       console.warn("Calendar list fetch failed (non-fatal):", e?.message || e);
     }
 
-    // Build safe redirect URL (force https, no :80)
-    const base = buildSafeBase(req);
-    const redirectUrl = new URL(
-      `/admin/integrations?connected=1&studioId=${studioId}`,
-      base
-    );
-
-    // Redirect + clear the nonce cookie on the response
-    const res = NextResponse.redirect(redirectUrl);
+    // Redirect to site root (NEXT_PUBLIC_BASE_URL or request origin)
+    const target = getSafeBaseUrl(req);
+    const res = NextResponse.redirect(target);
     res.cookies.set("gcal_oauth_state", "", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -107,7 +101,6 @@ export async function GET(req) {
     return res;
   } catch (err) {
     console.error("OAuth callback error:", err?.message || err);
-    // Clear nonce cookie even on error
     const res = new NextResponse("OAuth callback error", { status: 500 });
     res.cookies.set("gcal_oauth_state", "", {
       httpOnly: true,
