@@ -1,18 +1,12 @@
 "use client";
 
 export default function OfficePreview({
-                                        locale = "el",
-                                        title = "Ο χώρος μας",
-                                        description = "Φροντίζουμε ο χώρος μας να σε κάνει να νιώθεις άνετα και ευχάριστα κάθε φορά που έρχεσαι.",
-                                        images = [],
-                                      }) {
+locale = "el",
+title = "Ο χώρος",
+images = [],
+}) {
   const isEN = locale === "en";
-  const tTitle = title || (isEN ? "Our Space" : "Ο χώρος μας");
-  const tDesc =
-    description ||
-    (isEN
-      ? "We make sure our space feels comfortable and pleasant every time you visit."
-      : "Φροντίζουμε ο χώρος μας να σε κάνει να νιώθεις άνετα και ευχάριστα κάθε φορά που έρχεσαι.");
+  const tTitle = title || (isEN ? "The studio" : "Ο χώρος");
 
   return (
     <section className="py-12">
@@ -20,8 +14,6 @@ export default function OfficePreview({
         <div className="max-w-6xl mx-auto">
           <h2 className="title-black">{tTitle}</h2>
           <div className="max-w-xl mb-8">
-            {/*<p className="text-gray-700 text-lg">{tDesc}</p>*/}
-            {/* No CTA here by request */}
           </div>
         </div>
 

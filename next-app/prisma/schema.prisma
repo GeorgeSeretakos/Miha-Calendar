@@ -21,4 +21,31 @@ model Studio {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  timezone               String  @default("Europe/Athens")
+  slotDurationMinutes    Int     @default(30)
+  // Optional “discovered” calendar ids (we still fall back to searching by name)
+  availabilityCalendarId String?
+  bookingCalendarId      String? // defaults to "primary" if null
+
+  iframeSrc String? @db.Text
+  website   String?
+
+  calendarConnection CalendarConnection?
+}
+
+model CalendarConnection {
+  id       String @id @default(cuid())
+  studio   Studio @relation(fields: [studioId], references: [id])
+  studioId String @unique
+
+  calendarId   String? // Which calendar they initially picked, if any (legacy)
+  accessToken  String?
+  refreshToken String?
+  expiry       DateTime?
+
+  grantedScopes String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
