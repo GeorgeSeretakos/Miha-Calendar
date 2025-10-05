@@ -5,6 +5,23 @@ import { cookies } from "next/headers";
 import { exchangeCodeForTokens, googleApiGet } from "@lib/googleAuth";
 import { prisma } from "@lib/prisma";
 
+function buildSafeBase(req) {
+  // Prefer explicit base from env if provided (e.g., https://miha-calendar.netlify.app)
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envBase && /^https?:\/\//i.test(envBase)) {
+    const u = new URL(envBase);
+    // Always force https in production
+    if (process.env.NODE_ENV === "production") u.protocol = "https:";
+    u.port = ""; // no explicit port
+    return u;
+  }
+  // Fallback: derive from the incoming request and normalize
+  const u = new URL(req.url);
+  u.protocol = "https:";
+  u.port = ""; // strip :80 etc.
+  return u;
+}
+
 export async function GET(req) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -15,15 +32,6 @@ export async function GET(req) {
   const studioId = state.get("studioId");
   const stateNonce = state.get("nonce");
   const cookieNonce = cookies().get("gcal_oauth_state")?.value;
-
-  // Clear nonce cookie (one-time use)
-  cookies().set("gcal_oauth_state", "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
 
   if (!code || !studioId) {
     return new NextResponse("Missing code or studioId", { status: 400 });
@@ -45,12 +53,11 @@ export async function GET(req) {
         ? new Date(tokens.expiry_date)
         : new Date(Date.now() + (tokens.expires_in || 0) * 1000);
 
-    // Upsert connection — DO NOT overwrite refreshToken with null/undefined
+    // Upsert connection — don't overwrite refreshToken with null/undefined
     await prisma.calendarConnection.upsert({
       where: { studioId },
       update: {
         accessToken: tokens.access_token || undefined,
-        // Only update refreshToken if Google returned one (prompt=consent ensures this on first grant)
         ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
         expiry: expiresAt,
         grantedScopes: tokens.scope?.split(" ") ?? [],
@@ -64,7 +71,7 @@ export async function GET(req) {
       },
     });
 
-    // Try to auto-select the primary calendar (optional convenience)
+    // Optional: auto-select primary calendar
     try {
       const calendars = await googleApiGet(
         "https://www.googleapis.com/calendar/v3/users/me/calendarList",
@@ -78,17 +85,37 @@ export async function GET(req) {
         });
       }
     } catch (e) {
-      // Non-fatal: we can let the admin pick later
       console.warn("Calendar list fetch failed (non-fatal):", e?.message || e);
     }
 
-    // Success — redirect back to your admin screen
-    return NextResponse.redirect(
-      new URL(`/admin/integrations?connected=1&studioId=${studioId}`, req.url)
+    // Build safe redirect URL (force https, no :80)
+    const base = buildSafeBase(req);
+    const redirectUrl = new URL(
+      `/admin/integrations?connected=1&studioId=${studioId}`,
+      base
     );
+
+    // Redirect + clear the nonce cookie on the response
+    const res = NextResponse.redirect(redirectUrl);
+    res.cookies.set("gcal_oauth_state", "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+    return res;
   } catch (err) {
     console.error("OAuth callback error:", err?.message || err);
-    // Consider redirecting with an error flag for nicer UX
-    return new NextResponse("OAuth callback error", { status: 500 });
+    // Clear nonce cookie even on error
+    const res = new NextResponse("OAuth callback error", { status: 500 });
+    res.cookies.set("gcal_oauth_state", "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+    return res;
   }
 }
