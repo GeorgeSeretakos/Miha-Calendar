@@ -19,7 +19,7 @@ export default function BlogPage() {
   // - Fallback to default export or `posts`
   const posts = useMemo(() => {
     const fallback =
-      blogData.default || blogData.posts || []; // backward compatibility
+      blogData.default || blogData.posts_el || []; // backward compatibility
     if (locale === "en") return blogData.posts_en || fallback;
     return blogData.posts_el || fallback;
   }, [locale]);
