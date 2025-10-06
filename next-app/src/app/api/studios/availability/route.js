@@ -33,13 +33,13 @@ export async function POST(req) {
     const timezone = tzOverride || studio.timezone || "Europe/Athens";
     const slotMinutes = slotOverride || studio.slotDurationMinutes || 30;
 
-    // Build day window (UTC ISO for Google)
+    // Day window (UTC ISO for Google)
     const dayStartLocal = new Date(`${day}T00:00:00`);
     const dayEndLocal = new Date(dayStartLocal.getTime() + 24 * 60 * 60 * 1000);
     const timeMinISO = dayStartLocal.toISOString();
     const timeMaxISO = dayEndLocal.toISOString();
 
-    // 0) Get a valid token (refresh if needed)
+    // 0) Get a valid token
     let accessToken;
     try {
       accessToken = await getValidAccessToken(studio.calendarConnection.id);
@@ -47,11 +47,10 @@ export async function POST(req) {
       if (e instanceof ReconnectRequiredError) {
         return NextResponse.json({ error: "Reconnect calendar" }, { status: 401 });
       }
-      // transient / unknown error
       return NextResponse.json({ error: "Google auth error" }, { status: 502 });
     }
 
-    // 1) Resolve calendars (Availability by name if not stored; Bookings uses primary if null)
+    // 1) Resolve calendars
     let availabilityCalendarId = studio.availabilityCalendarId || null;
     try {
       if (!availabilityCalendarId) {
@@ -62,18 +61,18 @@ export async function POST(req) {
             { status: 404 }
           );
         }
-        // Best-effort persist for next calls
+        // best-effort persist
         await prisma.studio.update({
           where: { id: studio.id },
           data: { availabilityCalendarId },
         }).catch(() => {});
       }
-    } catch (e) {
+    } catch {
       return NextResponse.json({ error: "Failed to resolve calendars" }, { status: 502 });
     }
     const bookingCalendarId = studio.bookingCalendarId || "primary";
 
-    // 2) Query Google: availability windows and busy slots
+    // 2) Query Google: availability windows (transparent) + busy windows (booking calendar)
     let availResp, fb;
     try {
       availResp = await listEvents(accessToken, availabilityCalendarId, {
@@ -88,7 +87,7 @@ export async function POST(req) {
         timeMaxISO,
         timezone,
       });
-    } catch (e) {
+    } catch {
       return NextResponse.json({ error: "Google service error" }, { status: 502 });
     }
 
@@ -104,10 +103,31 @@ export async function POST(req) {
       })
       .filter(Boolean);
 
+    // Busy from Google events
     const busyWindows = (fb.calendars?.[bookingCalendarId]?.busy || []).map(b => ({
       start: new Date(b.start),
       end: new Date(b.end),
     }));
+
+    // Busy from active DB holds (expiresAt > now)
+    try {
+      const now = new Date();
+      const holds = await prisma.appointmentHold.findMany({
+        where: {
+          studioId: studio.id,
+          // overlaps with the day window
+          startISO: { lt: new Date(timeMaxISO) },
+          endISO:   { gt: new Date(timeMinISO) },
+          expiresAt: { gt: now },
+        },
+        select: { startISO: true, endISO: true },
+      });
+      for (const h of holds) {
+        busyWindows.push({ start: h.startISO, end: h.endISO });
+      }
+    } catch (e) {
+      console.warn("holds lookup failed:", e?.message || e);
+    }
 
     // 3) Slice into fixed slots and filter by busy
     const outSlots = [];

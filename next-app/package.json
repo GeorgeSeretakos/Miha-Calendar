@@ -13,6 +13,7 @@
   "dependencies": {
     "@googlemaps/js-api-loader": "^1.16.10",
     "@prisma/client": "^6.16.2",
+    "jose": "^6.1.0",
     "keen-slider": "^6.8.6",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.541.0",

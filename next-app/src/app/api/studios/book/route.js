@@ -117,6 +117,8 @@ export async function POST(req) {
       message ? `Message:\n${message}` : null,
     ].filter(Boolean);
 
+    console.log("Attendees: ", attendees);
+
     const eventBody = {
       summary,
       description: descriptionLines.join("\n"),

@@ -15,23 +15,23 @@ function addMonths(d,n){ return new Date(d.getFullYear(), d.getMonth()+n, 1); }
 function sameDay(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
 function formatMonthHeader(d){ return `${MONTH_LONG[d.getMonth()]} ${d.getFullYear()}`; }
 function formatSelectedHeader(d){ return `${WEEKDAY_LONG[(d.getDay()+6)%7]} ${d.getDate()} ${MONTH_LONG[d.getMonth()]}`; }
-function ymd(d){ // YYYY-MM-DD in local time
+function ymd(d){
   const y=d.getFullYear();
   const m=String(d.getMonth()+1).padStart(2,"0");
   const day=String(d.getDate()).padStart(2,"0");
   return `${y}-${m}-${day}`;
 }
-function hhmm(d){ // 24h HH:MM
+function hhmm(d){
   const h=String(d.getHours()).padStart(2,"0");
   const m=String(d.getMinutes()).padStart(2,"0");
   return `${h}:${m}`;
 }
 
 export default function AvailabilityBoard({
-studioId,
-defaultTimezone = "Europe/Athens",
-embedded = false,
-}) {
+                                            studioId,
+                                            defaultTimezone = "Europe/Athens",
+                                            embedded = false,
+                                          }) {
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const [viewDate, setViewDate] = useState(startOfMonth(today));
@@ -40,10 +40,18 @@ embedded = false,
   const [timezone, setTimezone] = useState(defaultTimezone);
 
   const [loading, setLoading] = useState(false);
-  const [slots, setSlots] = useState([]); // [{startISO, endISO, label}]
+  const [slots, setSlots] = useState([]);
   const [error, setError] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
 
-  // Build calendar grid
+  // allow other components (e.g., form) to trigger a refresh (after HOLD/booking)
+  useEffect(() => {
+    function onReload(){ setReloadTick(t => t + 1); }
+    window.addEventListener("booking:reload", onReload);
+    return () => window.removeEventListener("booking:reload", onReload);
+  }, []);
+
+  // Build calendar grid (6 weeks)
   const days = useMemo(() => {
     const first = startOfMonth(viewDate);
     const firstWeekday = (first.getDay() + 6) % 7; // Mon=0
@@ -73,13 +81,10 @@ embedded = false,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             studioId,
-            day: ymd(selected),          // local YYYY-MM-DD
-            timezone,                    // use UI tz (or studio default)
-            // slotDurationMinutes: 30,  // optional override
+            day: ymd(selected),
+            timezone,
           }),
         });
-
-        // console.log("Availability Response: ", res);
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -89,20 +94,27 @@ embedded = false,
         const data = await res.json();
         if (cancelled) return;
 
-        // Normalize to display labels in local time
+        // Map to UI slots
         const uiSlots = (data.slots || []).map(s => {
           const sDate = new Date(s.start);
           const eDate = new Date(s.end);
           return {
             startISO: s.start,
             endISO: s.end,
-            label: hhmm(sDate),   // e.g., "09:30"
+            label: hhmm(sDate),
             endLabel: hhmm(eDate),
           };
         });
+        
+        // If the selected day is "today", hide any slot whose start is <= now
+        let filtered = uiSlots;
+        if (sameDay(selected, today)) {
+          const now = new Date(); // epoch ms; safe to compare with ISO (which carries its offset)
+          filtered = uiSlots.filter(s => new Date(s.startISO).getTime() > now.getTime());
+        }
 
         setTimezone(data.timezone || timezone);
-        setSlots(uiSlots);
+        setSlots(filtered);
       } catch (e) {
         if (!cancelled) {
           setError(String(e.message || e));
@@ -115,7 +127,7 @@ embedded = false,
 
     run();
     return () => { cancelled = true; };
-  }, [studioId, selected, timezone]);
+  }, [studioId, selected, timezone, reloadTick]);
 
   const Card = (
     <div className="rounded-xl bg-[#111315] border border-white/10 p-4 shadow-sm w-full h-full text-gray-200">
@@ -222,7 +234,7 @@ embedded = false,
                       try {
                         const detail = {
                           day: ymd(selected),
-                          time: s.label,            // "HH:MM"
+                          time: s.label,
                           startISO: s.startISO,
                           endISO: s.endISO,
                           timezone,

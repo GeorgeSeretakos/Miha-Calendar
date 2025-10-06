@@ -49,3 +49,15 @@ model CalendarConnection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model AppointmentHold {
+  id        String   @id @default(cuid())
+  studioId  String
+  startISO  DateTime
+  endISO    DateTime
+  expiresAt DateTime
+  jti       String   @unique
+
+  @@unique([studioId, startISO, endISO])
+  @@index([studioId, startISO, endISO])
+}

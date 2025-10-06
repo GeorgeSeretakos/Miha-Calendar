@@ -1,5 +1,3 @@
-// app/book/studio/[slug]/availability/page.jsx
-// NO "use client" — server page
 import { prisma } from "@lib/prisma";
 import AvailabilityBoard from "@components/book/AvailabilityBoard";
 import AppointmentForm from "@components/book/AppointmentForm";
@@ -25,7 +23,7 @@ export default async function AvailabilityPage(props) {
           <div className="max-w-5xl mx-auto w-full">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-2xl sm:text-3xl font-semibold">{studio.name}</h2>
+                <h2>{studio.name}</h2>
                 <p className="text-gray-700 mt-1 flex items-center gap-2">
                   <MapPin className="h-5 w-5 text-blue-500" />
                   {studio.address}
