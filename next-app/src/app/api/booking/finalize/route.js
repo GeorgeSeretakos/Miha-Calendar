@@ -10,8 +10,25 @@ import { notifyOrganizerAndFirm } from "@lib/notifyOrganizerAndFirm";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.BOOKING_JWT_SECRET);
 
-function toAbs(req, pathWithQuery) {
-  return new URL(pathWithQuery, req.url);
+/**
+ * Build an absolute HTTPS URL for redirects.
+ * - Prefers NEXT_PUBLIC_SITE_URL or SITE_URL (must include protocol).
+ * - Otherwise derives from proxy headers and forces https://.
+ */
+function absUrl(req, pathWithQuery) {
+  const site =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL;
+
+  if (site) return new URL(pathWithQuery, site);
+
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host");
+
+  // Always force https in redirects to avoid ERR_SSL_PROTOCOL_ERROR behind proxies
+  const origin = `https://${host}`;
+  return new URL(pathWithQuery, origin);
 }
 
 export async function GET(req) {
@@ -21,7 +38,7 @@ export async function GET(req) {
 
     // 1) No token at all -> missing_token
     if (!token) {
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=error&reason=missing_token"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=error&reason=missing_token"));
     }
 
     // 2) Verify token; if invalid/expired, redirect with specific reason
@@ -31,9 +48,9 @@ export async function GET(req) {
     } catch (e) {
       const name = e?.name || "";
       if (name === "JWTExpired") {
-        return NextResponse.redirect(toAbs(req, "/thank-you?status=error&reason=expired_token"));
+        return NextResponse.redirect(absUrl(req, "/thank-you?status=error&reason=expired_token"));
       }
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=error&reason=invalid_token"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=error&reason=invalid_token"));
     }
 
     const { studioId, startISO, endISO, firstName, lastName, email, phone, message, timezone, jti } = payload || {};
@@ -43,7 +60,7 @@ export async function GET(req) {
       include: { calendarConnection: true },
     });
     if (!studio || !studio.calendarConnection) {
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=error&reason=studio"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=error&reason=studio"));
     }
 
     // 3) Ensure a non-expired DB hold exists and matches this token (jti)
@@ -58,7 +75,7 @@ export async function GET(req) {
       },
     });
     if (!hold || hold.expiresAt <= now || (jti && hold.jti !== jti)) {
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=taken"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=taken"));
     }
 
     // 4) Google auth
@@ -66,7 +83,7 @@ export async function GET(req) {
     try {
       accessToken = await getValidAccessToken(studio.calendarConnection.id);
     } catch {
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=error&reason=google_auth"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=error&reason=google_auth"));
     }
 
     const calendarId = studio.bookingCalendarId || "primary";
@@ -80,11 +97,10 @@ export async function GET(req) {
       timezone: tz,
     });
     if ((fb.calendars?.[calendarId]?.busy || []).length > 0) {
-      return NextResponse.redirect(toAbs(req, "/thank-you?status=taken"));
+      return NextResponse.redirect(absUrl(req, "/thank-you?status=taken"));
     }
 
-    // 6) Create event in Google Calendar
-    // NOTE: do NOT include organizer in attendees; Google doesn't email the organizer on create anyway.
+    // 6) Create event in Google Calendar (attendee only; Google sends invite to attendee)
     const summary = `Miha Bodytec Appointment — ${firstName} ${lastName}`;
     const description = [
       `Studio: ${studio.name}`,
@@ -125,7 +141,7 @@ export async function GET(req) {
         timezone: tz,
         eventId: created?.id,
         iCalUID: created?.iCalUID,
-        organizerEmail: studio.email,
+        organizerEmail: studio.email, // optional explicit organizer email
       });
     } catch (e) {
       console.warn("notifyOrganizerAndFirm failed:", e?.message || e);
@@ -147,9 +163,9 @@ export async function GET(req) {
       console.warn("Hold delete failed:", e?.message || e);
     }
 
-    return NextResponse.redirect(toAbs(req, "/thank-you?status=success"));
+    return NextResponse.redirect(absUrl(req, "/thank-you?status=success"));
   } catch (err) {
     console.error("booking/finalize error:", err);
-    return NextResponse.redirect(toAbs(req, "/thank-you?status=error"));
+    return NextResponse.redirect(absUrl(req, "/thank-you?status=error"));
   }
 }

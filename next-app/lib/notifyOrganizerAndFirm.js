@@ -68,7 +68,7 @@ export async function notifyOrganizerAndFirm({
       timeStyle: "short",
     });
 
-    const subject = `Website: New EMS Training Book – ${studio.name} (${when})`;
+    const subject = `Miha Bodytec Greece Bookings – ${studio.name} (${when})`;
 
     const html = `
       <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif">

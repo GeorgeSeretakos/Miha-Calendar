@@ -1,4 +1,3 @@
-// app/thank-you/page.jsx
 import { Suspense } from "react";
 import ThankYouContent from "./thank-you.client"; // client file below
 
