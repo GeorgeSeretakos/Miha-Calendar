@@ -16,11 +16,10 @@ function baseUrl(req) {
   const fromEnv = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL;
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  // force https to avoid SSL protocol errors behind proxies
   return `https://${host}`;
 }
 
-// strict overlap (adjacent allowed)
+// strict overlap: adjacent is allowed
 function overlapsStrict(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
 }
@@ -44,11 +43,20 @@ export async function POST(req) {
     const timezone = studio.timezone || "Europe/Athens";
     const calendarId = studio.bookingCalendarId || "primary";
 
-    // Reject slots starting too soon (server-side)
+    // Reject slots starting too soon (server-side, only for "now" day)
     const nowTZ = new Date(new Date().toLocaleString("en-US", { timeZone: timezone }));
-    const cutoff = new Date(nowTZ.getTime() + GRACE_MIN * 60 * 1000);
-    if (new Date(startISO) <= cutoff) {
-      return NextResponse.json({ ok: false, reason: "past_or_grace", nowTZ: nowTZ.toISOString(), cutoff: cutoff.toISOString() }, { status: 409 });
+    const start = new Date(startISO);
+    const end   = new Date(endISO);
+    const sameDay = new Date(start).toLocaleString("sv-SE", { timeZone: timezone }).slice(0,10)
+      === nowTZ.toLocaleString("sv-SE", { timeZone: timezone }).slice(0,10);
+    if (sameDay) {
+      const cutoff = new Date(nowTZ.getTime() + GRACE_MIN * 60 * 1000);
+      if (start <= cutoff) {
+        return NextResponse.json(
+          { ok: false, reason: "past_or_grace", nowTZ: nowTZ.toISOString(), cutoff: cutoff.toISOString() },
+          { status: 409 }
+        );
+      }
     }
 
     // Google auth just to check current conflicts
@@ -62,14 +70,11 @@ export async function POST(req) {
       return NextResponse.json({ error: "Google auth error" }, { status: 502 });
     }
 
-    // Re-check Google availability right now (strict overlap check rather than "length > 0")
-    const startDate = new Date(startISO);
-    const endDate   = new Date(endISO);
-
+    // Re-check Google availability right now (STRICT overlap)
     const fb = await freeBusy(accessToken, {
       calendarId,
-      timeMinISO: startDate.toISOString(),
-      timeMaxISO: endDate.toISOString(),
+      timeMinISO: start.toISOString(),
+      timeMaxISO: end.toISOString(),
       timezone,
     });
 
@@ -77,8 +82,7 @@ export async function POST(req) {
       start: new Date(b.start),
       end: new Date(b.end),
     }));
-
-    const gcalOverlap = busyBlocks.some(b => overlapsStrict(startDate, endDate, b.start, b.end));
+    const gcalOverlap = busyBlocks.some(b => overlapsStrict(start, end, b.start, b.end));
     if (gcalOverlap) {
       return NextResponse.json(
         {
@@ -96,36 +100,27 @@ export async function POST(req) {
 
     try {
       await prisma.$transaction(async (tx) => {
-        // remove any expired hold for the same slot (prevents P2002)
         await tx.appointmentHold.deleteMany({
           where: {
             studioId,
-            startISO: startDate,
-            endISO: endDate,
+            startISO: start,
+            endISO: end,
             expiresAt: { lte: new Date() },
           },
         });
 
-        // try to create the new hold
         await tx.appointmentHold.create({
-          data: {
-            studioId,
-            startISO: startDate,
-            endISO: endDate,
-            expiresAt,
-            jti,
-          },
+          data: { studioId, startISO: start, endISO: end, expiresAt, jti },
         });
       });
     } catch (e) {
-      // Unique constraint => someone (possibly you earlier) is already holding this slot and it's still active
       if (e?.code === "P2002") {
         return NextResponse.json({ ok: false, reason: "hold_active" }, { status: 409 });
       }
-      // Fallback: check existing
+      // fallback: check existing
       try {
         const existing = await prisma.appointmentHold.findUnique({
-          where: { studioId_startISO_endISO: { studioId, startISO: startDate, endISO: endDate } },
+          where: { studioId_startISO_endISO: { studioId, startISO: start, endISO: end } },
           select: { expiresAt: true },
         });
         if (existing && existing.expiresAt > new Date()) {
@@ -150,7 +145,6 @@ export async function POST(req) {
       timeZone: timezone, dateStyle: "medium", timeStyle: "short",
     });
 
-    // Send magic-link email to client
     await sendBookingConfirmationEmail({
       to: email,
       studioName: studio.name,

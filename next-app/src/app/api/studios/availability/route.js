@@ -6,16 +6,20 @@ import { getValidAccessToken, ReconnectRequiredError } from "@lib/getValidAccess
 import { resolveCalendarIdByName, listEvents, freeBusy } from "@lib/googleCalendar";
 import { alignSlots, toISO } from "@lib/slots";
 
-// strict time overlap (adjacent is allowed)
+// strict overlap: adjacent is allowed
 function overlapsStrict(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
+}
+
+// day string (YYYY-MM-DD) for a Date as seen in a given IANA timezone
+function ymdInTz(date, tz) {
+  return new Date(date).toLocaleString("sv-SE", { timeZone: tz }).slice(0, 10);
 }
 
 export async function POST(req) {
   try {
     const body = await req.json();
     const { studioId, day, timezone: tzOverride, slotDurationMinutes: slotOverride } = body || {};
-
     if (!studioId || !day) {
       return NextResponse.json({ error: "studioId and day are required." }, { status: 400 });
     }
@@ -31,12 +35,13 @@ export async function POST(req) {
     const timezone = tzOverride || studio.timezone || "Europe/Athens";
     const slotMinutes = slotOverride || studio.slotDurationMinutes || 30;
 
-    // Day window (UTC ISO for Google). If server tz ≠ studio tz, this is "good enough" for a day window;
-    // Google queries below are also limited by TZ-aware event start/end.
-    const dayStartLocal = new Date(`${day}T00:00:00`);
-    const dayEndLocal = new Date(dayStartLocal.getTime() + 24 * 60 * 60 * 1000);
-    const timeMinISO = dayStartLocal.toISOString();
-    const timeMaxISO = dayEndLocal.toISOString();
+    // ---- Wide fetch window to avoid server-TZ clipping ----
+    // Base on UTC midnight of requested day, then expand: [-12h, +36h]
+    const dayStartUTC = new Date(`${day}T00:00:00Z`);
+    const timeMin = new Date(dayStartUTC.getTime() - 12 * 60 * 60 * 1000);
+    const timeMax = new Date(dayStartUTC.getTime() + 36 * 60 * 60 * 1000);
+    const timeMinISO = timeMin.toISOString();
+    const timeMaxISO = timeMax.toISOString();
 
     // 0) Google access token
     let accessToken;
@@ -60,18 +65,14 @@ export async function POST(req) {
             { status: 404 }
           );
         }
-        // Best-effort persist
-        prisma.studio.update({
-          where: { id: studio.id },
-          data: { availabilityCalendarId },
-        }).catch(() => {});
+        prisma.studio.update({ where: { id: studio.id }, data: { availabilityCalendarId } }).catch(() => {});
       }
     } catch {
       return NextResponse.json({ error: "Failed to resolve calendars" }, { status: 502 });
     }
     const bookingCalendarId = studio.bookingCalendarId || "primary";
 
-    // 2) Query Google: availability windows (transparent) + busy windows (booking calendar)
+    // 2) Query Google: availability windows (transparent) + busy windows
     let availResp, fb;
     try {
       availResp = await listEvents(accessToken, availabilityCalendarId, {
@@ -79,7 +80,6 @@ export async function POST(req) {
         timeMaxISO,
         timezone,
       });
-
       fb = await freeBusy(accessToken, {
         calendarId: bookingCalendarId,
         timeMinISO,
@@ -102,7 +102,6 @@ export async function POST(req) {
       })
       .filter(Boolean);
 
-    // Busy from Google events
     const busyWindows = (fb.calendars?.[bookingCalendarId]?.busy || []).map(b => ({
       start: new Date(b.start),
       end: new Date(b.end),
@@ -114,8 +113,8 @@ export async function POST(req) {
       const holds = await prisma.appointmentHold.findMany({
         where: {
           studioId: studio.id,
-          startISO: { lt: new Date(timeMaxISO) },
-          endISO:   { gt: new Date(timeMinISO) },
+          startISO: { lt: timeMax },
+          endISO:   { gt: timeMin },
           expiresAt: { gt: now },
         },
         select: { startISO: true, endISO: true },
@@ -125,18 +124,14 @@ export async function POST(req) {
       console.warn("holds lookup failed:", e?.message || e);
     }
 
-    // 3) Slice into fixed slots and filter by busy (STRICT overlap; adjacent is allowed)
+    // 3) Slice into fixed slots, filter by STRICT busy overlap
     const outSlots = [];
-    const windowMin = new Date(timeMinISO).getTime();
-    const windowMax = new Date(timeMaxISO).getTime();
-
     for (const w of availabilityWindows) {
-      const wStart = new Date(Math.max(w.start.getTime(), windowMin));
-      const wEnd = new Date(Math.min(w.end.getTime(), windowMax));
-      if (!(wStart < wEnd)) continue;
-
-      const candidates = alignSlots(wStart, wEnd, slotMinutes);
+      const candidates = alignSlots(w.start, w.end, slotMinutes);
       for (const s of candidates) {
+        // Keep only slots that belong to the requested *day* in the studio timezone
+        if (ymdInTz(s.start, timezone) !== day) continue;
+
         const conflict = busyWindows.some(b => overlapsStrict(s.start, s.end, b.start, b.end));
         if (!conflict) outSlots.push({ start: toISO(s.start), end: toISO(s.end) });
       }
@@ -144,25 +139,23 @@ export async function POST(req) {
 
     outSlots.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 
-    // 4) Hide already-started / near-now slots for *today* in the requested TZ (keep API in sync with UI)
+    // 4) Hide already-started / near-now slots for *today* (server-side)
     const nowTZ = new Date(new Date().toLocaleString("en-US", { timeZone: timezone }));
-    const todayYMD = nowTZ.toLocaleString("sv-SE", { timeZone: timezone }).slice(0, 10); // YYYY-MM-DD
-    let filteredSlots = outSlots;
+    const todayYMD = ymdInTz(nowTZ, timezone);
     const GRACE_MIN = 5;
-    if (day === todayYMD) {
-      const cutoffISO = new Date(nowTZ.getTime() + GRACE_MIN * 60 * 1000).toISOString();
-      filteredSlots = outSlots.filter(s => s.start > cutoffISO);
-    }
+    const slots = (day === todayYMD)
+      ? outSlots.filter(s => new Date(s.start) > new Date(nowTZ.getTime() + GRACE_MIN * 60 * 1000))
+      : outSlots;
 
     return NextResponse.json({
       studioId: studio.id,
       timezone,
       slotDurationMinutes: slotMinutes,
       window: {
-        timeMin: new Date(timeMinISO).toLocaleString("sv-SE", { timeZone: "UTC" }),
-        timeMax: new Date(timeMaxISO).toLocaleString("sv-SE", { timeZone: "UTC" }),
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
       },
-      slots: filteredSlots,
+      slots,
       meta: {
         availabilityCalendarId,
         bookingCalendarId,

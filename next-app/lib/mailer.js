@@ -20,7 +20,7 @@ function confirmTemplate({ studioName, whenText, confirmUrl }) {
         </a>
       </p>
       <p style="margin:16px 0 0;font-size:12px;color:#666">
-        Ο σύνδεσμος λήγει σε 15 λεπτά. Αν δεν ζήτησες εσύ αυτό το email, αγνόησέ το.
+        Ο σύνδεσμος λήγει σε 5 λεπτά. Αν δεν ζήτησες εσύ αυτό το email, αγνόησέ το.
       </p>
     </div>
   `;
@@ -32,7 +32,7 @@ studioName,
 whenText,
 confirmUrl,
 replyTo,           // optional
-from = process.env.RESEND_FROM || "Bookings <book@yourdomain.gr>",
+from = process.env.RESEND_FROM || "Bookings <book@mihabodytecgreece.gr>",
 }) {
   return resend.emails.send({
     from,
