@@ -10,13 +10,19 @@ import { sendBookingConfirmationEmail } from "@lib/mailer";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.BOOKING_JWT_SECRET);
 const TOKEN_TTL_MIN = 5; // 5-minute magic link
+const GRACE_MIN = 5;     // don't allow booking that starts within next 5 minutes
 
 function baseUrl(req) {
-  const fromEnv = process.env.NEXT_PUBLIC_BASE_URL;
+  const fromEnv = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL;
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  return `${proto}://${host}`;
+  // force https to avoid SSL protocol errors behind proxies
+  return `https://${host}`;
+}
+
+// strict overlap (adjacent allowed)
+function overlapsStrict(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && aEnd > bStart;
 }
 
 export async function POST(req) {
@@ -35,6 +41,16 @@ export async function POST(req) {
       return NextResponse.json({ error: "Studio or calendar connection not found." }, { status: 404 });
     }
 
+    const timezone = studio.timezone || "Europe/Athens";
+    const calendarId = studio.bookingCalendarId || "primary";
+
+    // Reject slots starting too soon (server-side)
+    const nowTZ = new Date(new Date().toLocaleString("en-US", { timeZone: timezone }));
+    const cutoff = new Date(nowTZ.getTime() + GRACE_MIN * 60 * 1000);
+    if (new Date(startISO) <= cutoff) {
+      return NextResponse.json({ ok: false, reason: "past_or_grace", nowTZ: nowTZ.toISOString(), cutoff: cutoff.toISOString() }, { status: 409 });
+    }
+
     // Google auth just to check current conflicts
     let accessToken;
     try {
@@ -46,39 +62,76 @@ export async function POST(req) {
       return NextResponse.json({ error: "Google auth error" }, { status: 502 });
     }
 
-    const timezone = studio.timezone || "Europe/Athens";
-    const calendarId = studio.bookingCalendarId || "primary";
+    // Re-check Google availability right now (strict overlap check rather than "length > 0")
+    const startDate = new Date(startISO);
+    const endDate   = new Date(endISO);
 
-    // Re-check Google availability right now
     const fb = await freeBusy(accessToken, {
       calendarId,
-      timeMinISO: new Date(startISO).toISOString(),
-      timeMaxISO: new Date(endISO).toISOString(),
+      timeMinISO: startDate.toISOString(),
+      timeMaxISO: endDate.toISOString(),
       timezone,
     });
-    const taken = (fb.calendars?.[calendarId]?.busy || []).length > 0;
-    if (taken) {
-      return NextResponse.json({ ok: false, reason: "slot_taken" }, { status: 409 });
+
+    const busyBlocks = (fb.calendars?.[calendarId]?.busy || []).map(b => ({
+      start: new Date(b.start),
+      end: new Date(b.end),
+    }));
+
+    const gcalOverlap = busyBlocks.some(b => overlapsStrict(startDate, endDate, b.start, b.end));
+    if (gcalOverlap) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "google_conflict",
+          busy: busyBlocks.map(b => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
+        },
+        { status: 409 }
+      );
     }
 
-    // Create a DB HOLD (5 minutes)
+    // Create/refresh a DB HOLD (5 minutes) — prune expired row first to avoid unique conflicts
     const expiresAt = new Date(Date.now() + TOKEN_TTL_MIN * 60 * 1000);
     const jti = crypto.randomUUID();
+
     try {
-      await prisma.appointmentHold.create({
-        data: {
-          studioId,
-          startISO: new Date(startISO),
-          endISO: new Date(endISO),
-          expiresAt,
-          jti,
-        },
+      await prisma.$transaction(async (tx) => {
+        // remove any expired hold for the same slot (prevents P2002)
+        await tx.appointmentHold.deleteMany({
+          where: {
+            studioId,
+            startISO: startDate,
+            endISO: endDate,
+            expiresAt: { lte: new Date() },
+          },
+        });
+
+        // try to create the new hold
+        await tx.appointmentHold.create({
+          data: {
+            studioId,
+            startISO: startDate,
+            endISO: endDate,
+            expiresAt,
+            jti,
+          },
+        });
       });
     } catch (e) {
-      // Unique constraint => someone else is holding this slot
+      // Unique constraint => someone (possibly you earlier) is already holding this slot and it's still active
       if (e?.code === "P2002") {
-        return NextResponse.json({ ok: false, reason: "slot_taken" }, { status: 409 });
+        return NextResponse.json({ ok: false, reason: "hold_active" }, { status: 409 });
       }
+      // Fallback: check existing
+      try {
+        const existing = await prisma.appointmentHold.findUnique({
+          where: { studioId_startISO_endISO: { studioId, startISO: startDate, endISO: endDate } },
+          select: { expiresAt: true },
+        });
+        if (existing && existing.expiresAt > new Date()) {
+          return NextResponse.json({ ok: false, reason: "hold_active" }, { status: 409 });
+        }
+      } catch (_) {}
       throw e;
     }
 
